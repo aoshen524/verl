@@ -5,8 +5,10 @@ only checkpoint inputs while leaving intermediates and recomputed tensors
 untouched. See docs/checkpoint_input_offload.md for architecture details.
 """
 
-import torch
 from contextlib import nullcontext
+from typing import Any, Callable
+
+import torch
 
 
 class CheckpointInputOffload:
@@ -47,12 +49,12 @@ class CheckpointInputOffload:
        fires → sync H2D transfer from CPU pinned memory back to GPU.
     """
 
-    def __init__(self, pin_memory=True, min_tensor_numel=1024):
+    def __init__(self, pin_memory: bool = True, min_tensor_numel: int = 1024):
         self.pin_memory = pin_memory
         self.min_tensor_numel = min_tensor_numel
         self.d2h_stream = torch.cuda.Stream()
         # Optional callbacks for CPU memory profiling (set externally)
-        self._on_pack_cb = None   # Callable[[int], None] — nbytes packed
+        self._on_pack_cb = None  # Callable[[int], None] — nbytes packed
         self._on_unpack_cb = None  # Callable[[int], None] — nbytes unpacked
         # Diagnostic counters (per forward pass, reset in __enter__)
         self._diag_pack_count = 0
@@ -62,7 +64,7 @@ class CheckpointInputOffload:
         self._diag_skip_noncuda = 0
         self._diag_unpack_count = 0
 
-    def _pack(self, tensor):
+    def _pack(self, tensor: Any) -> Any:
         """Pack hook: async D2H for eligible CUDA tensors, pass-through otherwise."""
         if not isinstance(tensor, torch.Tensor) or not tensor.is_cuda:
             self._diag_skip_noncuda += 1
@@ -94,21 +96,21 @@ class CheckpointInputOffload:
         if self._on_pack_cb is not None:
             self._on_pack_cb(nbytes)
 
-        return {'device': tensor.device, 'cpu': cpu_tensor}
+        return {"device": tensor.device, "cpu": cpu_tensor}
 
-    def _unpack(self, packed):
+    def _unpack(self, packed: Any) -> Any:
         """Unpack hook: H2D copy back to GPU."""
         if not isinstance(packed, dict):
             return packed
 
         self._diag_unpack_count += 1
-        cpu_tensor = packed['cpu']
+        cpu_tensor = packed["cpu"]
         if self._on_unpack_cb is not None:
             self._on_unpack_cb(cpu_tensor.nelement() * cpu_tensor.element_size())
         # D2H guaranteed complete by __exit__ sync (forward already finished)
-        return cpu_tensor.to(packed['device'], non_blocking=self.pin_memory)
+        return cpu_tensor.to(packed["device"], non_blocking=self.pin_memory)
 
-    def get_context_fn(self):
+    def get_context_fn(self) -> Callable[[], tuple[Any, Any]]:
         """Returns context_fn for gradient_checkpointing_enable.
 
         Currently returns no-op contexts. The "innermost wins" nesting
@@ -120,7 +122,7 @@ class CheckpointInputOffload:
             return nullcontext(), nullcontext()
         return context_fn
 
-    def _reset_diag(self):
+    def _reset_diag(self) -> None:
         self._diag_pack_count = 0
         self._diag_pack_bytes = 0
         self._diag_skip_param = 0
@@ -128,22 +130,22 @@ class CheckpointInputOffload:
         self._diag_skip_noncuda = 0
         self._diag_unpack_count = 0
 
-    def get_diag_summary(self):
+    def get_diag_summary(self) -> dict[str, float | int]:
         """Return diagnostic summary dict for the last forward pass."""
         return {
-            'pack_count': self._diag_pack_count,
-            'pack_bytes_mb': self._diag_pack_bytes / (1024 * 1024),
-            'skip_param': self._diag_skip_param,
-            'skip_small': self._diag_skip_small,
-            'skip_noncuda': self._diag_skip_noncuda,
-            'unpack_count': self._diag_unpack_count,
+            "pack_count": self._diag_pack_count,
+            "pack_bytes_mb": self._diag_pack_bytes / (1024 * 1024),
+            "skip_param": self._diag_skip_param,
+            "skip_small": self._diag_skip_small,
+            "skip_noncuda": self._diag_skip_noncuda,
+            "unpack_count": self._diag_unpack_count,
         }
 
-    def __enter__(self):
+    def __enter__(self) -> "CheckpointInputOffload":
         self._reset_diag()
         torch._C._autograd._push_saved_tensors_default_hooks(self._pack, self._unpack)
         return self
 
-    def __exit__(self, *args):
+    def __exit__(self, *args: Any) -> None:
         torch._C._autograd._pop_saved_tensors_default_hooks()
         self.d2h_stream.synchronize()
