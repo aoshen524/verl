@@ -286,6 +286,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
         use_prefix_grouper=False,
         use_tiled_mlp=False,
         tiled_mlp_shards=4,
+        vision_dp=False,
     ):
         from torch.distributed.fsdp import CPUOffload, MixedPrecision
         from transformers import (
@@ -423,6 +424,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                 use_prefix_grouper=use_prefix_grouper,
                 use_tiled_mlp=use_tiled_mlp,
                 tiled_mlp_shards=tiled_mlp_shards,
+                vision_dp=vision_dp,
             )
 
             # some parameters may not in torch_dtype. TODO(zhangchi.usc1992) remove this after we switch to fsdp2
@@ -803,6 +805,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                 use_prefix_grouper=self.config.actor.get("use_prefix_grouper", False),
                 use_tiled_mlp=use_tiled_mlp,
                 tiled_mlp_shards=tiled_mlp_shards,
+                vision_dp=self.config.model.get("vision_dp", False),
             )
 
             # get the original unwrapped module
@@ -857,6 +860,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                 use_prefix_grouper=use_prefix_grouper,
                 use_tiled_mlp=ref_use_tiled_mlp,
                 tiled_mlp_shards=ref_tiled_mlp_shards,
+                vision_dp=self.config.model.get("vision_dp", False),
             )[0]
             OmegaConf.set_struct(self.config.ref, True)
             with open_dict(self.config.ref):
@@ -1339,6 +1343,7 @@ class CriticWorker(Worker, DistProfilerExtension):
                 ulysses_sp_size=self.ulysses_sequence_parallel_size,
                 use_tiled_mlp=use_tiled_mlp,
                 tiled_mlp_shards=tiled_mlp_shards,
+                vision_dp=config.model.get("vision_dp", False),
             )
 
             # some parameters may not in torch_dtype
