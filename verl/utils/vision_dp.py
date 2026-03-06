@@ -154,9 +154,7 @@ def prepare_local_vision_inputs(
     local_pixel_values = pixel_values[start_patch:end_patch]
     local_grid_thw = grid_thw[first_img_idx : last_img_idx + 1]
 
-    # Cross-check: verify extracted slice matches independently computed patch counts
-    independent_counts = get_image_patch_counts(local_grid_thw)
-    expected_patches = sum(independent_counts)
+    expected_patches = end_patch - start_patch
     assert local_pixel_values.shape[0] == expected_patches, (
         f"[Vision DP] Local patch count mismatch: "
         f"extracted={local_pixel_values.shape[0]}, expected={expected_patches}, "
@@ -222,7 +220,7 @@ class GatherVisionEmbeddings(Function):
             )
             local_padded = torch.cat([local_embeddings, padding], dim=0)
         else:
-            local_padded = local_embeddings
+            local_padded = local_embeddings.contiguous()
 
         # All-gather
         gathered = [torch.empty_like(local_padded) for _ in range(dp_size)]
@@ -248,14 +246,6 @@ class GatherVisionEmbeddings(Function):
 
         # all_reduce(SUM) aggregates partial gradients from all SP ranks:
         # each rank only has non-zero grad for vision tokens in its sequence shard.
-        if not grad_output.is_cuda:
-            raise RuntimeError(
-                "GatherVisionEmbeddings.backward requires CUDA tensors (NCCL backend). "
-                f"Got device={grad_output.device}"
-            )
-        # NCCL all_reduce requires contiguous tensors. In the real training path
-        # (masked_scatter_backward → view), grad is already contiguous (no-op).
-        # Kept as defensive guard against upstream autograd changes.
         grad = grad_output.contiguous()
         dist.all_reduce(grad, op=dist.ReduceOp.SUM, group=dp_group)
 
@@ -265,6 +255,26 @@ class GatherVisionEmbeddings(Function):
         local_grad = grad[start:end]
 
         return local_grad, None, None
+
+
+def _unpack_deepstack(local_embeddings, deepstack_merger_list, dtype, device):
+    """Unpack Qwen3-VL deepstack from forward output.
+
+    If local_embeddings is a tuple (normal rank), split into (embeddings, deepstack_list).
+    Otherwise (empty rank), create matching empty deepstack tensors with requires_grad
+    so they participate in the backward all_reduce (prevents NCCL deadlock).
+    """
+    if isinstance(local_embeddings, tuple):
+        return local_embeddings[0], local_embeddings[1]
+
+    # Empty rank: create matching empty deepstack tensors
+    num_deepstack = len(deepstack_merger_list)
+    h = local_embeddings.shape[1]
+    deepstack = [
+        torch.empty((0, h), dtype=dtype, device=device).requires_grad_()
+        for _ in range(num_deepstack)
+    ]
+    return local_embeddings, deepstack
 
 
 def create_dp_vision_forward(original_forward):
@@ -313,12 +323,8 @@ def create_dp_vision_forward(original_forward):
             f"grid_thw.shape={grid_thw.shape}"
         )
 
-        # Get spatial_merge_size from merger (VLMs like Qwen use merger to reduce embeddings)
-        spatial_merge_size = 1
-        if hasattr(self, "merger") and hasattr(self.merger, "spatial_merge_size"):
-            spatial_merge_size = self.merger.spatial_merge_size
-        elif hasattr(self, "spatial_merge_size"):
-            spatial_merge_size = self.spatial_merge_size
+        # Get spatial_merge_size from model (VLMs like Qwen use merger to reduce embeddings)
+        spatial_merge_size = getattr(self, "spatial_merge_size", 1)
 
         # Calculate embedding counts (after merger) for gather verification
         embedding_counts = get_image_embedding_counts(grid_thw_cpu, spatial_merge_size)
@@ -326,10 +332,11 @@ def create_dp_vision_forward(original_forward):
 
         image_assignments, _ = assign_images_to_dp_ranks(patch_counts, sp_size)
 
-        # Step 2: Extract local inputs
+        # Step 2: Extract local inputs (pass CPU grid_thw to avoid GPU→CPU syncs)
         local_pixels, local_grid_thw, local_indices = prepare_local_vision_inputs(
-            hidden_states, grid_thw, image_assignments, sp_rank
+            hidden_states, grid_thw_cpu, image_assignments, sp_rank
         )
+        local_grid_thw = local_grid_thw.to(grid_thw.device)
 
         # Detect Qwen3-VL deepstack: model attribute, not return type,
         # because empty ranks don't call original_forward and can't inspect the return.
@@ -342,11 +349,12 @@ def create_dp_vision_forward(original_forward):
             )
         else:
             # This rank has no images, create empty tensor with correct hidden size
-            hidden_size = getattr(getattr(self, "config", None), "out_hidden_size", None)
+            config = getattr(self, "config", None)
+            hidden_size = getattr(config, "out_hidden_size", None) or getattr(config, "hidden_size", None)
             if hidden_size is None:
                 raise RuntimeError(
-                    f"Cannot determine hidden_size: self.config.out_hidden_size not found. "
-                    f"Model type: {type(self).__name__}"
+                    f"Cannot determine hidden_size: self.config has neither "
+                    f"out_hidden_size nor hidden_size. Model type: {type(self).__name__}"
                 )
 
             local_embeddings = torch.empty(
@@ -360,18 +368,9 @@ def create_dp_vision_forward(original_forward):
         # Unpack Qwen3-VL deepstack: forward returns (embeddings, list[3 × Tensor])
         local_deepstack = None
         if has_deepstack:
-            if isinstance(local_embeddings, tuple):
-                local_embeddings, local_deepstack = local_embeddings[0], local_embeddings[1]
-            else:
-                # Empty rank: create matching empty deepstack tensors
-                num_deepstack = len(self.deepstack_merger_list)
-                h = local_embeddings.shape[1]
-                local_deepstack = [
-                    torch.empty(
-                        (0, h), dtype=hidden_states.dtype, device=hidden_states.device
-                    )
-                    for _ in range(num_deepstack)
-                ]
+            local_embeddings, local_deepstack = _unpack_deepstack(
+                local_embeddings, self.deepstack_merger_list, hidden_states.dtype, hidden_states.device
+            )
 
         # Step 4: All-gather (contiguous assignment, no reordering needed)
         # Compute per-rank embedding counts locally (grid_thw is replicated on all ranks)

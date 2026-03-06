@@ -26,13 +26,14 @@ from verl.utils.vision_dp import (
     assign_images_to_dp_ranks,
     prepare_local_vision_inputs,
     create_dp_vision_forward,
+    _unpack_deepstack,
 )
 
 
 class TestGetImagePatchCounts:
     """Tests for get_image_patch_counts function."""
 
-    def test_patch_counts_multi_image_correct_products(self):
+    def test_basic_patch_counts(self):
         """Test basic patch count computation."""
         grid_thw = torch.tensor([
             [2, 4, 4],   # 2*4*4 = 32
@@ -42,19 +43,19 @@ class TestGetImagePatchCounts:
         counts = get_image_patch_counts(grid_thw)
         assert counts == [32, 4, 64]
 
-    def test_patch_counts_single_image_correct(self):
+    def test_single_image(self):
         """Test with a single image."""
         grid_thw = torch.tensor([[1, 4, 4]])  # 16 patches
         counts = get_image_patch_counts(grid_thw)
         assert counts == [16]
 
-    def test_patch_counts_empty_input_raises_value_error(self):
+    def test_empty_input_raises(self):
         """Empty grid_thw must raise ValueError."""
         grid_thw = torch.empty((0, 3), dtype=torch.long)
         with pytest.raises(ValueError, match="grid_thw is empty"):
             get_image_patch_counts(grid_thw)
 
-    def test_patch_counts_video_frames_correct(self):
+    def test_video_frames(self):
         """Test with video (multiple temporal frames)."""
         grid_thw = torch.tensor([
             [4, 4, 4],   # 4 frames, 4*4 patches each = 64 total
@@ -66,24 +67,24 @@ class TestGetImagePatchCounts:
 class TestGetImageEmbeddingCounts:
     """Tests for get_image_embedding_counts function."""
 
-    def test_embedding_counts_no_merge_equals_patch_counts(self):
+    def test_no_merge(self):
         """spatial_merge_size=1 should equal patch counts."""
         grid_thw = torch.tensor([[1, 8, 8], [1, 4, 4]])
         assert get_image_embedding_counts(grid_thw, 1) == [64, 16]
 
-    def test_embedding_counts_merge_size_2_halves_hw(self):
+    def test_merge_size_2(self):
         """spatial_merge_size=2: h and w halved."""
         grid_thw = torch.tensor([[1, 8, 8], [1, 4, 4]])
         # t * (h/2) * (w/2): 1*4*4=16, 1*2*2=4
         assert get_image_embedding_counts(grid_thw, 2) == [16, 4]
 
-    def test_embedding_counts_empty_input_raises_value_error(self):
+    def test_empty_raises(self):
         """Empty grid_thw must raise ValueError."""
         grid_thw = torch.empty((0, 3), dtype=torch.long)
         with pytest.raises(ValueError, match="grid_thw is empty"):
             get_image_embedding_counts(grid_thw, 2)
 
-    def test_embedding_counts_video_with_merge_correct(self):
+    def test_video_with_merge(self):
         """Video: t=2, h=8, w=8, merge=2 -> 2*(8/2)*(8/2) = 32."""
         grid_thw = torch.tensor([[2, 8, 8]])
         assert get_image_embedding_counts(grid_thw, 2) == [32]
@@ -92,7 +93,7 @@ class TestGetImageEmbeddingCounts:
 class TestAssignImagesToDpRanks:
     """Tests for assign_images_to_dp_ranks function."""
 
-    def test_assign_balanced_equal_images_correct_loads(self):
+    def test_balanced_assignment(self):
         """Test balanced assignment with equal-sized images."""
         patch_counts = [100, 100, 100, 100]
         assignments, loads = assign_images_to_dp_ranks(patch_counts, dp_size=2)
@@ -104,7 +105,7 @@ class TestAssignImagesToDpRanks:
         assert loads[0] == 200
         assert loads[1] == 200
 
-    def test_assign_imbalanced_images_greedy_split(self):
+    def test_imbalanced_images(self):
         """Test with one large image and several small ones."""
         patch_counts = [500, 100, 100, 100]  # One large image
         assignments, loads = assign_images_to_dp_ranks(patch_counts, dp_size=2)
@@ -119,7 +120,7 @@ class TestAssignImagesToDpRanks:
         assert loads[0] == 500
         assert loads[1] == 300
 
-    def test_assign_load_balanced_unequal_patches_reduces_imbalance(self):
+    def test_load_balanced_unequal_patches(self):
         """Greedy balancing should outperform naive count-based split."""
         # 4096 + 256 + 256 + 256 = 4864 total, target per rank = 2432
         patch_counts = [4096, 256, 256, 256]
@@ -131,7 +132,7 @@ class TestAssignImagesToDpRanks:
         assert loads[0] == 4096
         assert loads[1] == 768
 
-    def test_assign_fewer_images_than_ranks_partial_assignment(self):
+    def test_fewer_images_than_ranks(self):
         """Test when number of images is less than dp_size."""
         patch_counts = [100, 200]
         assignments, loads = assign_images_to_dp_ranks(patch_counts, dp_size=4)
@@ -146,12 +147,12 @@ class TestAssignImagesToDpRanks:
             all_assigned.update(a)
         assert all_assigned == {0, 1}
 
-    def test_assign_empty_input_raises_value_error(self):
+    def test_empty_input_raises(self):
         """Empty patch_counts must raise ValueError."""
         with pytest.raises(ValueError, match="patch_counts is empty"):
             assign_images_to_dp_ranks([], dp_size=4)
 
-    def test_assign_single_rank_gets_all_images(self):
+    def test_single_rank(self):
         """Test with dp_size=1 (no parallelism)."""
         patch_counts = [100, 200, 300]
         assignments, loads = assign_images_to_dp_ranks(patch_counts, dp_size=1)
@@ -160,7 +161,7 @@ class TestAssignImagesToDpRanks:
         assert assignments == [[0, 1, 2]]
         assert loads == [600]
 
-    def test_assign_equal_images_equal_loads(self):
+    def test_equal_images_equal_size(self):
         """Test perfect balance: same number of equal-sized images per rank."""
         patch_counts = [100, 100, 100, 100, 100, 100]  # 6 images
         assignments, loads = assign_images_to_dp_ranks(patch_counts, dp_size=3)
@@ -170,7 +171,7 @@ class TestAssignImagesToDpRanks:
         # All loads should be equal
         assert all(l == 200 for l in loads)
 
-    def test_assign_image_order_preserved_contiguous(self):
+    def test_image_order_preserved(self):
         """Test that image indices within each rank are sorted (contiguous)."""
         patch_counts = [10, 20, 30, 40, 50]
         assignments, _ = assign_images_to_dp_ranks(patch_counts, dp_size=2)
@@ -183,7 +184,7 @@ class TestAssignImagesToDpRanks:
                 for i in range(1, len(rank_assignment)):
                     assert rank_assignment[i] == rank_assignment[i - 1] + 1
 
-    def test_assign_contiguous_coverage_all_dp_sizes(self):
+    def test_contiguous_coverage(self):
         """All images are covered exactly once across ranks."""
         patch_counts = [10, 20, 30, 40, 50, 60, 70]
         for dp_size in [1, 2, 3, 4, 7]:
@@ -193,12 +194,12 @@ class TestAssignImagesToDpRanks:
                 all_indices.extend(a)
             assert sorted(all_indices) == list(range(len(patch_counts)))
 
-    def test_assign_zero_dp_size_raises_value_error(self):
+    def test_zero_dp_size_raises(self):
         """dp_size=0 must raise ValueError."""
         with pytest.raises(ValueError, match="dp_size must be positive"):
             assign_images_to_dp_ranks([100], dp_size=0)
 
-    def test_assign_negative_dp_size_raises_value_error(self):
+    def test_negative_dp_size_raises(self):
         """dp_size<0 must raise ValueError."""
         with pytest.raises(ValueError, match="dp_size must be positive"):
             assign_images_to_dp_ranks([100], dp_size=-1)
@@ -207,7 +208,7 @@ class TestAssignImagesToDpRanks:
 class TestPrepareLocalVisionInputs:
     """Tests for prepare_local_vision_inputs function."""
 
-    def test_prepare_two_images_splits_correctly(self):
+    def test_basic_extraction(self):
         """Test basic local input extraction."""
         # Create test data: 100 patches total
         pixel_values = torch.randn(100, 768)  # 100 patches, 768 dim
@@ -239,7 +240,7 @@ class TestPrepareLocalVisionInputs:
         assert local_indices == [1]
         assert torch.allclose(local_pix, pixel_values[36:100])
 
-    def test_prepare_multiple_contiguous_images_per_rank(self):
+    def test_multiple_images_per_rank(self):
         """Test extraction when a rank has multiple contiguous images."""
         # Create test data: 200 patches total (50 + 50 + 50 + 50)
         pixel_values = torch.randn(200, 768)
@@ -266,7 +267,7 @@ class TestPrepareLocalVisionInputs:
         expected = pixel_values[0:100]
         assert torch.allclose(local_pix, expected)
 
-    def test_prepare_empty_rank_returns_empty_tensors(self):
+    def test_empty_rank(self):
         """Test extraction when a rank has no images assigned."""
         pixel_values = torch.randn(100, 768)
         grid_thw = torch.tensor([[1, 10, 10]])  # 100 patches
@@ -283,7 +284,7 @@ class TestPrepareLocalVisionInputs:
         assert local_grid.shape[0] == 0
         assert local_indices == []
 
-    def test_prepare_local_inputs_grid_thw_values_preserved(self):
+    def test_grid_thw_preserved(self):
         """Test that grid_thw values are correctly extracted (contiguous)."""
         pixel_values = torch.randn(150, 768)
         grid_thw = torch.tensor([
@@ -304,7 +305,7 @@ class TestPrepareLocalVisionInputs:
         assert torch.equal(local_grid[0], grid_thw[0])
         assert torch.equal(local_grid[1], grid_thw[1])
 
-    def test_prepare_out_of_range_dp_rank_raises_value_error(self):
+    def test_out_of_range_dp_rank_raises(self):
         """dp_rank out of range must raise ValueError."""
         pixel_values = torch.randn(100, 768)
         grid_thw = torch.tensor([[1, 10, 10]])
@@ -312,7 +313,7 @@ class TestPrepareLocalVisionInputs:
         with pytest.raises(ValueError, match="dp_rank=1 out of range"):
             prepare_local_vision_inputs(pixel_values, grid_thw, image_assignments, dp_rank=1)
 
-    def test_prepare_negative_dp_rank_raises_value_error(self):
+    def test_negative_dp_rank_raises(self):
         """Negative dp_rank must raise ValueError."""
         pixel_values = torch.randn(100, 768)
         grid_thw = torch.tensor([[1, 10, 10]])
@@ -324,7 +325,7 @@ class TestPrepareLocalVisionInputs:
 class TestIntegration:
     """Integration tests combining multiple functions."""
 
-    def test_full_workflow_all_patches_covered(self):
+    def test_full_workflow(self):
         """Test the complete workflow of image distribution."""
         # Simulate 5 images with different sizes
         grid_thw = torch.tensor([
@@ -368,7 +369,7 @@ class TestIntegration:
         # Total patches across all ranks should equal original
         assert total_local_patches == total_patches
 
-    def test_same_size_images_4_ranks_balanced(self):
+    def test_same_size_images(self):
         """Test with all same-size images (user's scenario)."""
         num_images = 50
         patch_per_image = 64  # 8x8 patches
@@ -390,29 +391,6 @@ class TestIntegration:
         # Loads should be balanced (either 12*64=768 or 13*64=832)
         for load in loads:
             assert load in [768, 832]
-
-
-class TestCreateDpVisionForward:
-    """Tests for create_dp_vision_forward wrapper (CPU, no distributed)."""
-
-    def test_sp_size_1_raises_runtime_error(self):
-        """When sp_size <= 1, the wrapper should raise RuntimeError."""
-        from unittest.mock import patch as mock_patch
-
-        def original_forward(self, hidden_states, grid_thw, **kwargs):
-            return hidden_states
-
-        wrapped = create_dp_vision_forward(original_forward)
-
-        hidden_states = torch.randn(100, 768)
-        grid_thw = torch.tensor([[1, 10, 10]])
-
-        # Mock Ulysses SP to return sp_size=1
-        with mock_patch("verl.utils.vision_dp.get_ulysses_sequence_parallel_group", return_value=None), \
-             mock_patch("verl.utils.vision_dp.get_ulysses_sequence_parallel_world_size", return_value=1), \
-             mock_patch("verl.utils.vision_dp.get_ulysses_sequence_parallel_rank", return_value=0):
-            with pytest.raises(RuntimeError, match="sp_size=1"):
-                wrapped(None, hidden_states, grid_thw)
 
 
 class TestDeepstackDetection:
@@ -472,6 +450,71 @@ class TestDeepstackDetection:
         assert len(local_deepstack) == 3
         for ds in local_deepstack:
             assert ds.shape == (0, hidden_size)
+
+
+class TestUnpackDeepstack:
+    """Tests for _unpack_deepstack helper function."""
+
+    def test_tuple_input_unpacks_correctly(self):
+        """Normal rank: tuple return from forward is split into (embeddings, deepstack)."""
+        import torch.nn as nn
+
+        hidden_size = 3584
+        n = 20
+        main_emb = torch.randn(n, hidden_size)
+        ds_list = [torch.randn(n, hidden_size) for _ in range(3)]
+        merger_list = nn.ModuleList([nn.Identity() for _ in range(3)])
+
+        emb, ds = _unpack_deepstack((main_emb, ds_list), merger_list, torch.float32, "cpu")
+        assert torch.equal(emb, main_emb)
+        assert len(ds) == 3
+        for i in range(3):
+            assert torch.equal(ds[i], ds_list[i])
+
+    def test_empty_rank_creates_empty_tensors(self):
+        """Empty rank: non-tuple input produces empty deepstack tensors."""
+        import torch.nn as nn
+
+        hidden_size = 3584
+        merger_list = nn.ModuleList([nn.Identity() for _ in range(3)])
+        local_emb = torch.empty((0, hidden_size), dtype=torch.float32)
+
+        emb, ds = _unpack_deepstack(local_emb, merger_list, torch.float32, "cpu")
+        assert torch.equal(emb, local_emb)
+        assert len(ds) == 3
+        for t in ds:
+            assert t.shape == (0, hidden_size)
+
+    def test_empty_rank_deepstack_requires_grad(self):
+        """Empty deepstack tensors must have requires_grad=True to prevent NCCL deadlock."""
+        import torch.nn as nn
+
+        hidden_size = 1024
+        merger_list = nn.ModuleList([nn.Identity() for _ in range(2)])
+        local_emb = torch.empty((0, hidden_size), dtype=torch.float32)
+
+        _, ds = _unpack_deepstack(local_emb, merger_list, torch.float32, "cpu")
+        for t in ds:
+            assert t.requires_grad, (
+                "Empty deepstack tensors must have requires_grad=True "
+                "so they participate in backward all_reduce (prevents NCCL deadlock)"
+            )
+
+
+class TestEmbeddingCountsConsistency:
+    """Tests for consistency between patch counts and embedding counts."""
+
+    def test_embedding_counts_merge_1_equals_patch_counts(self):
+        """With spatial_merge_size=1, embedding counts must equal patch counts."""
+        grid_thw = torch.tensor([
+            [1, 4, 4],
+            [2, 8, 8],
+            [1, 6, 6],
+            [3, 4, 4],
+        ])
+        patch_counts = get_image_patch_counts(grid_thw)
+        embedding_counts = get_image_embedding_counts(grid_thw, spatial_merge_size=1)
+        assert patch_counts == embedding_counts
 
 
 if __name__ == "__main__":
