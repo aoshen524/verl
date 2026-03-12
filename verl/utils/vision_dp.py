@@ -110,7 +110,7 @@ def prepare_local_vision_inputs(
     grid_thw: torch.Tensor,
     image_assignments: List[List[int]],
     dp_rank: int,
-    patch_counts: List[int] = None,
+    patch_counts: List[int],
 ) -> Tuple[torch.Tensor, torch.Tensor, List[int]]:
     """Extract pixel values and grid_thw for this DP rank's assigned images.
 
@@ -118,8 +118,6 @@ def prepare_local_vision_inputs(
 
     Args:
         patch_counts: Pre-computed per-image patch counts [t*h*w, ...].
-            If None, they are recomputed from grid_thw. Pass this to avoid
-            redundant computation when the caller already has patch counts.
     """
     if dp_rank < 0 or dp_rank >= len(image_assignments):
         raise ValueError(
@@ -145,11 +143,7 @@ def prepare_local_vision_inputs(
     first_img_idx = local_indices[0]
     last_img_idx = local_indices[-1]
 
-    # Use pre-computed patch counts if available, otherwise compute from grid_thw
-    if patch_counts is not None:
-        patch_counts_tensor = torch.tensor(patch_counts, device=grid_thw.device, dtype=torch.long)
-    else:
-        patch_counts_tensor = grid_thw[:, 0] * grid_thw[:, 1] * grid_thw[:, 2]
+    patch_counts_tensor = torch.tensor(patch_counts, device=grid_thw.device, dtype=torch.long)
     offsets = torch.cat(
         (
             torch.zeros(1, device=grid_thw.device, dtype=patch_counts_tensor.dtype),
@@ -164,14 +158,7 @@ def prepare_local_vision_inputs(
     local_grid_thw = grid_thw[first_img_idx : last_img_idx + 1]
 
     # Verify against independently computed sum of per-image patch counts
-    # (not just end_patch - start_patch, which is tautologically true from slicing)
-    if patch_counts is not None:
-        expected_patches = sum(patch_counts[i] for i in local_indices)
-    else:
-        expected_patches = sum(
-            int((grid_thw[i, 0] * grid_thw[i, 1] * grid_thw[i, 2]).item())
-            for i in local_indices
-        )
+    expected_patches = sum(patch_counts[i] for i in local_indices)
     assert local_pixel_values.shape[0] == expected_patches, (
         f"[Vision DP] Local patch count mismatch: "
         f"extracted={local_pixel_values.shape[0]}, expected={expected_patches}, "

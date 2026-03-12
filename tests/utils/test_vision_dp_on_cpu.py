@@ -118,17 +118,18 @@ class TestPrepareLocalVisionInputs:
     def test_prepare_two_images_splits_correctly(self):
         pixel_values = torch.randn(100, 768)
         grid_thw = torch.tensor([[1, 6, 6], [1, 8, 8]])  # 36 + 64 = 100
+        patch_counts = get_image_patch_counts(grid_thw)
         image_assignments = [[0], [1]]
 
         # Rank 0
-        pix, grid, indices = prepare_local_vision_inputs(pixel_values, grid_thw, image_assignments, dp_rank=0)
+        pix, grid, indices = prepare_local_vision_inputs(pixel_values, grid_thw, image_assignments, dp_rank=0, patch_counts=patch_counts)
         assert pix.shape[0] == 36
         assert grid.shape[0] == 1
         assert indices == [0]
         assert torch.allclose(pix, pixel_values[:36])
 
         # Rank 1
-        pix, grid, indices = prepare_local_vision_inputs(pixel_values, grid_thw, image_assignments, dp_rank=1)
+        pix, grid, indices = prepare_local_vision_inputs(pixel_values, grid_thw, image_assignments, dp_rank=1, patch_counts=patch_counts)
         assert pix.shape[0] == 64
         assert indices == [1]
         assert torch.allclose(pix, pixel_values[36:100])
@@ -136,9 +137,10 @@ class TestPrepareLocalVisionInputs:
     def test_prepare_multiple_contiguous_images_per_rank(self):
         pixel_values = torch.randn(200, 768)
         grid_thw = torch.tensor([[1, 5, 10]] * 4)  # 4 x 50 patches
+        patch_counts = get_image_patch_counts(grid_thw)
         image_assignments = [[0, 1], [2, 3]]
 
-        pix, grid, indices = prepare_local_vision_inputs(pixel_values, grid_thw, image_assignments, dp_rank=0)
+        pix, grid, indices = prepare_local_vision_inputs(pixel_values, grid_thw, image_assignments, dp_rank=0, patch_counts=patch_counts)
         assert pix.shape[0] == 100
         assert grid.shape[0] == 2
         assert indices == [0, 1]
@@ -147,9 +149,10 @@ class TestPrepareLocalVisionInputs:
     def test_prepare_empty_rank_returns_empty(self):
         pixel_values = torch.randn(100, 768)
         grid_thw = torch.tensor([[1, 10, 10]])
+        patch_counts = get_image_patch_counts(grid_thw)
         image_assignments = [[0], []]
 
-        pix, grid, indices = prepare_local_vision_inputs(pixel_values, grid_thw, image_assignments, dp_rank=1)
+        pix, grid, indices = prepare_local_vision_inputs(pixel_values, grid_thw, image_assignments, dp_rank=1, patch_counts=patch_counts)
         assert pix.shape[0] == 0
         assert grid.shape[0] == 0
         assert indices == []
@@ -157,9 +160,10 @@ class TestPrepareLocalVisionInputs:
     def test_prepare_grid_thw_preserved(self):
         pixel_values = torch.randn(150, 768)
         grid_thw = torch.tensor([[1, 5, 5], [2, 5, 5], [3, 5, 5]])  # 25 + 50 + 75
+        patch_counts = get_image_patch_counts(grid_thw)
         image_assignments = [[0, 1], [2]]
 
-        _, local_grid, _ = prepare_local_vision_inputs(pixel_values, grid_thw, image_assignments, dp_rank=0)
+        _, local_grid, _ = prepare_local_vision_inputs(pixel_values, grid_thw, image_assignments, dp_rank=0, patch_counts=patch_counts)
         assert local_grid.shape == (2, 3)
         assert torch.equal(local_grid[0], grid_thw[0])
         assert torch.equal(local_grid[1], grid_thw[1])
@@ -189,7 +193,7 @@ class TestIntegration:
 
         total_local_patches = 0
         for rank in range(2):
-            pix, grid, indices = prepare_local_vision_inputs(pixel_values, grid_thw, assignments, dp_rank=rank)
+            pix, grid, indices = prepare_local_vision_inputs(pixel_values, grid_thw, assignments, dp_rank=rank, patch_counts=patch_counts)
             expected = sum(patch_counts[i] for i in indices)
             assert pix.shape[0] == expected
             assert grid.shape[0] == len(indices)

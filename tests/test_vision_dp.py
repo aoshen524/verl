@@ -216,13 +216,14 @@ class TestPrepareLocalVisionInputs:
             [1, 6, 6],   # 36 patches (indices 0-35)
             [1, 8, 8],   # 64 patches (indices 36-99)
         ])
+        patch_counts = get_image_patch_counts(grid_thw)
 
         # Assignment: rank 0 -> [0], rank 1 -> [1]
         image_assignments = [[0], [1]]
 
         # Rank 0's inputs
         local_pix, local_grid, local_indices = prepare_local_vision_inputs(
-            pixel_values, grid_thw, image_assignments, dp_rank=0
+            pixel_values, grid_thw, image_assignments, dp_rank=0, patch_counts=patch_counts
         )
 
         assert local_pix.shape[0] == 36
@@ -232,7 +233,7 @@ class TestPrepareLocalVisionInputs:
 
         # Rank 1's inputs
         local_pix, local_grid, local_indices = prepare_local_vision_inputs(
-            pixel_values, grid_thw, image_assignments, dp_rank=1
+            pixel_values, grid_thw, image_assignments, dp_rank=1, patch_counts=patch_counts
         )
 
         assert local_pix.shape[0] == 64
@@ -250,13 +251,14 @@ class TestPrepareLocalVisionInputs:
             [1, 5, 10],  # 50 patches
             [1, 5, 10],  # 50 patches
         ])
+        patch_counts = get_image_patch_counts(grid_thw)
 
         # Contiguous assignment: rank 0 -> [0, 1], rank 1 -> [2, 3]
         image_assignments = [[0, 1], [2, 3]]
 
         # Rank 0's inputs (images 0 and 1, contiguous)
         local_pix, local_grid, local_indices = prepare_local_vision_inputs(
-            pixel_values, grid_thw, image_assignments, dp_rank=0
+            pixel_values, grid_thw, image_assignments, dp_rank=0, patch_counts=patch_counts
         )
 
         assert local_pix.shape[0] == 100  # 50 + 50
@@ -271,13 +273,14 @@ class TestPrepareLocalVisionInputs:
         """Test extraction when a rank has no images assigned."""
         pixel_values = torch.randn(100, 768)
         grid_thw = torch.tensor([[1, 10, 10]])  # 100 patches
+        patch_counts = get_image_patch_counts(grid_thw)
 
         # Only rank 0 has the image, rank 1 is empty
         image_assignments = [[0], []]
 
         # Rank 1's inputs (empty)
         local_pix, local_grid, local_indices = prepare_local_vision_inputs(
-            pixel_values, grid_thw, image_assignments, dp_rank=1
+            pixel_values, grid_thw, image_assignments, dp_rank=1, patch_counts=patch_counts
         )
 
         assert local_pix.shape[0] == 0
@@ -292,13 +295,14 @@ class TestPrepareLocalVisionInputs:
             [2, 5, 5],   # 50 patches
             [3, 5, 5],   # 75 patches
         ])
+        patch_counts = get_image_patch_counts(grid_thw)
 
         # Contiguous: rank 0 -> [0, 1], rank 1 -> [2]
         image_assignments = [[0, 1], [2]]
 
         # Rank 0 should have grids for images 0 and 1
         _, local_grid, _ = prepare_local_vision_inputs(
-            pixel_values, grid_thw, image_assignments, dp_rank=0
+            pixel_values, grid_thw, image_assignments, dp_rank=0, patch_counts=patch_counts
         )
 
         assert local_grid.shape == (2, 3)
@@ -309,17 +313,19 @@ class TestPrepareLocalVisionInputs:
         """dp_rank out of range must raise ValueError."""
         pixel_values = torch.randn(100, 768)
         grid_thw = torch.tensor([[1, 10, 10]])
+        patch_counts = get_image_patch_counts(grid_thw)
         image_assignments = [[0]]
         with pytest.raises(ValueError, match="dp_rank=1 out of range"):
-            prepare_local_vision_inputs(pixel_values, grid_thw, image_assignments, dp_rank=1)
+            prepare_local_vision_inputs(pixel_values, grid_thw, image_assignments, dp_rank=1, patch_counts=patch_counts)
 
     def test_negative_dp_rank_raises(self):
         """Negative dp_rank must raise ValueError."""
         pixel_values = torch.randn(100, 768)
         grid_thw = torch.tensor([[1, 10, 10]])
+        patch_counts = get_image_patch_counts(grid_thw)
         image_assignments = [[0]]
         with pytest.raises(ValueError, match="dp_rank=-1 out of range"):
-            prepare_local_vision_inputs(pixel_values, grid_thw, image_assignments, dp_rank=-1)
+            prepare_local_vision_inputs(pixel_values, grid_thw, image_assignments, dp_rank=-1, patch_counts=patch_counts)
 
 
 class TestIntegration:
@@ -356,7 +362,7 @@ class TestIntegration:
         total_local_patches = 0
         for rank in range(2):
             local_pix, local_grid, local_indices = prepare_local_vision_inputs(
-                pixel_values, grid_thw, assignments, dp_rank=rank
+                pixel_values, grid_thw, assignments, dp_rank=rank, patch_counts=patch_counts
             )
 
             # Verify consistency
