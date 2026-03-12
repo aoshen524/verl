@@ -110,10 +110,16 @@ def prepare_local_vision_inputs(
     grid_thw: torch.Tensor,
     image_assignments: List[List[int]],
     dp_rank: int,
+    patch_counts: List[int] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor, List[int]]:
     """Extract pixel values and grid_thw for this DP rank's assigned images.
 
     Exploits contiguous assignment: a single slice instead of per-image cat.
+
+    Args:
+        patch_counts: Pre-computed per-image patch counts [t*h*w, ...].
+            If None, they are recomputed from grid_thw. Pass this to avoid
+            redundant computation when the caller already has patch counts.
     """
     if dp_rank < 0 or dp_rank >= len(image_assignments):
         raise ValueError(
@@ -139,12 +145,15 @@ def prepare_local_vision_inputs(
     first_img_idx = local_indices[0]
     last_img_idx = local_indices[-1]
 
-    # Compute patch offsets using cumsum (grid_thw may be on CPU or GPU)
-    patch_counts = grid_thw[:, 0] * grid_thw[:, 1] * grid_thw[:, 2]
+    # Use pre-computed patch counts if available, otherwise compute from grid_thw
+    if patch_counts is not None:
+        patch_counts_tensor = torch.tensor(patch_counts, device=grid_thw.device, dtype=torch.long)
+    else:
+        patch_counts_tensor = grid_thw[:, 0] * grid_thw[:, 1] * grid_thw[:, 2]
     offsets = torch.cat(
         (
-            torch.zeros(1, device=grid_thw.device, dtype=patch_counts.dtype),
-            torch.cumsum(patch_counts, dim=0),
+            torch.zeros(1, device=grid_thw.device, dtype=patch_counts_tensor.dtype),
+            torch.cumsum(patch_counts_tensor, dim=0),
         )
     )
 
@@ -154,7 +163,15 @@ def prepare_local_vision_inputs(
     local_pixel_values = pixel_values[start_patch:end_patch]
     local_grid_thw = grid_thw[first_img_idx : last_img_idx + 1]
 
-    expected_patches = end_patch - start_patch
+    # Verify against independently computed sum of per-image patch counts
+    # (not just end_patch - start_patch, which is tautologically true from slicing)
+    if patch_counts is not None:
+        expected_patches = sum(patch_counts[i] for i in local_indices)
+    else:
+        expected_patches = sum(
+            int((grid_thw[i, 0] * grid_thw[i, 1] * grid_thw[i, 2]).item())
+            for i in local_indices
+        )
     assert local_pixel_values.shape[0] == expected_patches, (
         f"[Vision DP] Local patch count mismatch: "
         f"extracted={local_pixel_values.shape[0]}, expected={expected_patches}, "
@@ -332,9 +349,10 @@ def create_dp_vision_forward(original_forward):
 
         image_assignments, _ = assign_images_to_dp_ranks(patch_counts, sp_size)
 
-        # Step 2: Extract local inputs (pass CPU grid_thw to avoid GPU→CPU syncs)
+        # Step 2: Extract local inputs (pass CPU grid_thw and pre-computed patch_counts
+        # to avoid redundant computation and GPU→CPU syncs)
         local_pixels, local_grid_thw, local_indices = prepare_local_vision_inputs(
-            hidden_states, grid_thw_cpu, image_assignments, sp_rank
+            hidden_states, grid_thw_cpu, image_assignments, sp_rank, patch_counts=patch_counts
         )
         local_grid_thw = local_grid_thw.to(grid_thw.device)
 

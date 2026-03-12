@@ -15,11 +15,14 @@
 Apply monkey-patch function to models
 """
 
+import logging
 import sys
 from types import SimpleNamespace
 from typing import Optional
 
 import torch
+
+logger = logging.getLogger(__name__)
 from transformers.modeling_flash_attention_utils import _flash_attention_forward
 from transformers.modeling_utils import PreTrainedModel
 
@@ -419,8 +422,12 @@ def apply_monkey_patch(
                         Qwen2VisionTransformerPretrainedModel.forward = create_dp_vision_forward(original_vision_forward)
                         Qwen2VisionTransformerPretrainedModel._vision_dp_patched = True
                         print(f"Monkey patch Qwen2VisionTransformerPretrainedModel.forward for Vision DP (dp_size={ulysses_sp_size})")
-                except ImportError as e:
-                    print(f"Warning: Could not patch Qwen2VisionTransformer for DP: {e}")
+                except ImportError:
+                    logger.warning(
+                        "Could not import Qwen2VisionTransformerPretrainedModel for Vision DP patching. "
+                        "Vision DP will NOT be applied for Qwen2-VL. "
+                        "Check your transformers version supports this model."
+                    )
 
                 # Patch Qwen2.5-VL VisionTransformer (uses a different class)
                 try:
@@ -431,8 +438,12 @@ def apply_monkey_patch(
                         Qwen2_5_VisionTransformerPretrainedModel.forward = create_dp_vision_forward(original_vision_forward_25)
                         Qwen2_5_VisionTransformerPretrainedModel._vision_dp_patched = True
                         print(f"Monkey patch Qwen2_5_VisionTransformerPretrainedModel.forward for Vision DP (dp_size={ulysses_sp_size})")
-                except ImportError as e:
-                    print(f"Warning: Could not patch Qwen2_5VisionTransformer for DP: {e}")
+                except ImportError:
+                    logger.warning(
+                        "Could not import Qwen2_5_VisionTransformerPretrainedModel for Vision DP patching. "
+                        "Vision DP will NOT be applied for Qwen2.5-VL. "
+                        "Check your transformers version supports this model."
+                    )
             else:
                 print(f"Vision DP disabled (vision_dp=False). ViT runs replicated on all {ulysses_sp_size} SP ranks.")
 
@@ -474,13 +485,21 @@ def apply_monkey_patch(
         if ulysses_sp_size > 1:
             if vision_dp:
                 from verl.utils.vision_dp import create_dp_vision_forward
-                from transformers.models.qwen3_vl.modeling_qwen3_vl import Qwen3VLVisionModel
 
-                if not getattr(Qwen3VLVisionModel, "_vision_dp_patched", False):
-                    original_vision_forward = Qwen3VLVisionModel.forward
-                    Qwen3VLVisionModel.forward = create_dp_vision_forward(original_vision_forward)
-                    Qwen3VLVisionModel._vision_dp_patched = True
-                    print(f"Monkey patch Qwen3VLVisionModel.forward for Vision DP (dp_size={ulysses_sp_size})")
+                try:
+                    from transformers.models.qwen3_vl.modeling_qwen3_vl import Qwen3VLVisionModel
+
+                    if not getattr(Qwen3VLVisionModel, "_vision_dp_patched", False):
+                        original_vision_forward = Qwen3VLVisionModel.forward
+                        Qwen3VLVisionModel.forward = create_dp_vision_forward(original_vision_forward)
+                        Qwen3VLVisionModel._vision_dp_patched = True
+                        print(f"Monkey patch Qwen3VLVisionModel.forward for Vision DP (dp_size={ulysses_sp_size})")
+                except ImportError:
+                    logger.warning(
+                        "Could not import Qwen3VLVisionModel for Vision DP patching. "
+                        "Vision DP will NOT be applied for Qwen3-VL. "
+                        "Check your transformers version supports this model."
+                    )
             else:
                 print(f"Vision DP disabled (vision_dp=False). ViT runs replicated on all {ulysses_sp_size} SP ranks.")
 
@@ -515,13 +534,21 @@ def apply_monkey_patch(
         if ulysses_sp_size > 1:
             if vision_dp:
                 from verl.utils.vision_dp import create_dp_vision_forward
-                from transformers.models.glm4v.modeling_glm4v import Glm4vVisionModel
 
-                if not getattr(Glm4vVisionModel, "_vision_dp_patched", False):
-                    original_vision_forward = Glm4vVisionModel.forward
-                    Glm4vVisionModel.forward = create_dp_vision_forward(original_vision_forward)
-                    Glm4vVisionModel._vision_dp_patched = True
-                    print(f"Monkey patch Glm4vVisionModel.forward for Vision DP (dp_size={ulysses_sp_size})")
+                try:
+                    from transformers.models.glm4v.modeling_glm4v import Glm4vVisionModel
+
+                    if not getattr(Glm4vVisionModel, "_vision_dp_patched", False):
+                        original_vision_forward = Glm4vVisionModel.forward
+                        Glm4vVisionModel.forward = create_dp_vision_forward(original_vision_forward)
+                        Glm4vVisionModel._vision_dp_patched = True
+                        print(f"Monkey patch Glm4vVisionModel.forward for Vision DP (dp_size={ulysses_sp_size})")
+                except ImportError:
+                    logger.warning(
+                        "Could not import Glm4vVisionModel for Vision DP patching. "
+                        "Vision DP will NOT be applied for GLM4V. "
+                        "Check your transformers version supports this model."
+                    )
             else:
                 print(f"Vision DP disabled (vision_dp=False). ViT runs replicated on all {ulysses_sp_size} SP ranks.")
 
