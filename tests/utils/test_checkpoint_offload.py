@@ -29,7 +29,6 @@ from torch.utils.checkpoint import checkpoint
 
 from verl.utils.checkpoint_offload import CheckpointInputOffload
 
-
 # Skip all tests if CUDA is not available
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
 
@@ -60,6 +59,7 @@ def _get_grads(model, x, offloader=None):
     """Run forward+backward and return parameter gradients."""
     model.zero_grad()
     from contextlib import nullcontext
+
     ctx_mgr = offloader if offloader is not None else nullcontext()
 
     with ctx_mgr:
@@ -71,7 +71,6 @@ def _get_grads(model, x, offloader=None):
 
 
 class TestCheckpointInputOffload:
-
     def test_numerical_correctness(self):
         """Gradients must match exactly with and without offloading."""
         torch.manual_seed(42)
@@ -88,10 +87,7 @@ class TestCheckpointInputOffload:
 
         for name in grads_baseline:
             assert name in grads_offload, f"Missing gradient for {name}"
-            torch.testing.assert_close(
-                grads_baseline[name], grads_offload[name],
-                msg=f"Gradient mismatch for {name}"
-            )
+            torch.testing.assert_close(grads_baseline[name], grads_offload[name], msg=f"Gradient mismatch for {name}")
 
     def test_gpu_memory_reduction(self):
         """Peak GPU memory should decrease with offloading enabled."""
