@@ -45,8 +45,6 @@ class CheckpointedMLP(nn.Module):
 def _get_grads(model, x, offloader=None):
     """Run forward+backward and return parameter gradients."""
     model.zero_grad()
-    ctx = offloader if offloader is not None else torch.utils.checkpoint.checkpoint
-    # Use nullcontext if no offloader
     from contextlib import nullcontext
     ctx_mgr = offloader if offloader is not None else nullcontext()
 
@@ -271,6 +269,13 @@ class TestCheckpointInputOffload:
             unpacked = offloader._unpack(packed)
             assert unpacked.shape == v.shape, f"View {i}: shape mismatch"
             torch.testing.assert_close(unpacked, v, msg=f"View {i}: value mismatch")
+
+    def test_unpack_foreign_dict_passthrough(self):
+        """Dicts not created by _pack should pass through unchanged."""
+        offloader = CheckpointInputOffload(pin_memory=True)
+        foreign = {"key": "value", "other": 123}
+        result = offloader._unpack(foreign)
+        assert result is foreign
 
     def test_prefix_grouper_conflict_runtime(self):
         """Runtime check should catch PrefixGrouper + offloader conflict."""
