@@ -102,7 +102,7 @@ class CheckpointInputOffload:
 
     def _unpack(self, packed: Any) -> Any:
         """Unpack hook: H2D copy back to GPU."""
-        if not isinstance(packed, dict):
+        if not isinstance(packed, dict) or "cpu" not in packed or "device" not in packed:
             return packed
 
         self._diag_unpack_count += 1
