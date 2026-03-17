@@ -53,6 +53,8 @@ class CheckpointInputOffload:
         self.pin_memory = pin_memory
         self.min_tensor_numel = min_tensor_numel
         self.d2h_stream = torch.cuda.Stream()
+        # Public context manager for saved_tensors_hooks (replaces private C API)
+        self._hook_context = torch.autograd.graph.saved_tensors_hooks(self._pack, self._unpack)
         # Optional callbacks for CPU memory profiling (set externally)
         self._on_pack_cb = None  # Callable[[int], None] — nbytes packed
         self._on_unpack_cb = None  # Callable[[int], None] — nbytes unpacked
@@ -143,9 +145,10 @@ class CheckpointInputOffload:
 
     def __enter__(self) -> "CheckpointInputOffload":
         self._reset_diag()
-        torch._C._autograd._push_saved_tensors_default_hooks(self._pack, self._unpack)
+        self._hook_context.__enter__()
         return self
 
     def __exit__(self, *args: Any) -> None:
-        torch._C._autograd._pop_saved_tensors_default_hooks()
-        self.d2h_stream.synchronize()
+        self._hook_context.__exit__(*args)
+        if self.d2h_stream is not None:
+            self.d2h_stream.synchronize()
