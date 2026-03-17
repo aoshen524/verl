@@ -504,7 +504,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                 gc_kwargs = {"use_reentrant": False}
                 checkpoint_input_offload = (
                     role == "actor"
-                    and hasattr(self.config, 'actor')
+                    and hasattr(self.config, "actor")
                     and self.config.actor.get("fsdp_config", {}).get("checkpoint_input_offload", False)
                 )
                 if checkpoint_input_offload and use_prefix_grouper:
@@ -517,6 +517,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                     )
                 if checkpoint_input_offload:
                     from verl.utils.checkpoint_offload import CheckpointInputOffload
+
                     self._checkpoint_offloader = CheckpointInputOffload(pin_memory=True)
                     gc_kwargs["context_fn"] = self._checkpoint_offloader.get_context_fn()
                 else:
@@ -967,7 +968,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                 config=actor_cfg, actor_module=self.actor_module_fsdp, actor_optimizer=self.actor_optimizer
             )
             # Pass checkpoint input offloader to actor
-            if hasattr(self, '_checkpoint_offloader') and self._checkpoint_offloader is not None:
+            if hasattr(self, "_checkpoint_offloader") and self._checkpoint_offloader is not None:
                 self.actor._checkpoint_offloader = self._checkpoint_offloader
 
         if self._is_rollout:

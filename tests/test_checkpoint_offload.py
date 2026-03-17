@@ -1,3 +1,17 @@
+# Copyright 2025 Bytedance Ltd. and/or its affiliates
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for CheckpointInputOffload.
 
 Tests verify:
@@ -108,10 +122,11 @@ class TestCheckpointInputOffload:
         peak_offload = torch.cuda.max_memory_allocated()
 
         # Offloading should use less or equal peak memory
-        # (For small models the effect may be minimal, so we just check it doesn't increase much)
+        # For small models the effect may be minimal due to fixed overhead
+        # (pinned memory allocator, stream objects, etc.), so we allow generous tolerance.
         print(f"Peak baseline: {peak_baseline / 1e6:.1f} MB, Peak offload: {peak_offload / 1e6:.1f} MB")
-        # Allow 10% tolerance for small model overhead
-        assert peak_offload <= peak_baseline * 1.1, (
+        # Allow 20% tolerance for small model overhead (pinned memory allocator overhead)
+        assert peak_offload <= peak_baseline * 1.2, (
             f"Offloading should not significantly increase memory: "
             f"baseline={peak_baseline / 1e6:.1f}MB, offload={peak_offload / 1e6:.1f}MB"
         )

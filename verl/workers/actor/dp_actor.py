@@ -158,6 +158,7 @@ class DataParallelPPOActor(BasePPOActor):
                 )
 
         from contextlib import nullcontext
+
         _offload_ctx = (
             self._checkpoint_offloader
             if self._checkpoint_offloader is not None and self.actor_module.training

@@ -1,3 +1,17 @@
+# Copyright 2025 Bytedance Ltd. and/or its affiliates
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Offload gradient checkpoint saved tensors to CPU pinned memory.
 
 Exploits PyTorch's "innermost wins" hook nesting to selectively offload
@@ -78,8 +92,10 @@ class CheckpointInputOffload:
             return tensor
 
         cpu_tensor = torch.empty(
-            tensor.shape, dtype=tensor.dtype,
-            layout=tensor.layout, device='cpu',
+            tensor.shape,
+            dtype=tensor.dtype,
+            layout=tensor.layout,
+            device="cpu",
             pin_memory=self.pin_memory,
         )
         # Ensure default stream's computation is visible to d2h_stream
@@ -118,8 +134,10 @@ class CheckpointInputOffload:
         Kept as a hook point for future instrumentation (e.g., logging
         offload stats during recomputation).
         """
+
         def context_fn():
             return nullcontext(), nullcontext()
+
         return context_fn
 
     def _reset_diag(self) -> None:
