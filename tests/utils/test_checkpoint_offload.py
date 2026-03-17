@@ -49,7 +49,7 @@ class CheckpointedMLP(nn.Module):
         for i, layer in enumerate(self.layers):
             if i > 0 and i < len(self.layers) - 1:
                 # Checkpoint middle layers (not first/last to test non-checkpointed path too)
-                x = checkpoint(lambda inp, l=layer: l(torch.relu(inp)), x, **self._gc_kwargs)
+                x = checkpoint(lambda inp, fn=layer: fn(torch.relu(inp)), x, **self._gc_kwargs)
             else:
                 x = layer(torch.relu(x))
         return x
@@ -102,7 +102,7 @@ class TestCheckpointInputOffload:
         # Baseline
         torch.cuda.reset_peak_memory_stats()
         torch.cuda.synchronize()
-        grads_baseline = _get_grads(model, x)
+        _get_grads(model, x)
         torch.cuda.synchronize()
         peak_baseline = torch.cuda.max_memory_allocated()
 
@@ -113,7 +113,7 @@ class TestCheckpointInputOffload:
         # With offloading
         offloader = CheckpointInputOffload(pin_memory=True, min_tensor_numel=1)
         model.enable_gc(context_fn=offloader.get_context_fn())
-        grads_offload = _get_grads(model, x, offloader=offloader)
+        _get_grads(model, x, offloader=offloader)
         torch.cuda.synchronize()
         peak_offload = torch.cuda.max_memory_allocated()
 
@@ -249,7 +249,7 @@ class TestCheckpointInputOffload:
         # Using as context manager should not raise
         with offloader:
             x = torch.randn(10, device="cuda", requires_grad=True)
-            y = x * 2
+            _ = x * 2
             # Inside context, hooks should be active
 
         # Outside context, hooks should be popped (no error on normal ops)
