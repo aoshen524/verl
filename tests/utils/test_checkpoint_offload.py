@@ -76,7 +76,7 @@ class TestCheckpointInputOffload:
         """Gradients must match exactly with and without offloading."""
         torch.manual_seed(42)
         model = CheckpointedMLP(dim=128, num_layers=4).cuda().to(torch.bfloat16)
-        x = torch.randn(4, 128, device='cuda', dtype=torch.bfloat16)
+        x = torch.randn(4, 128, device="cuda", dtype=torch.bfloat16)
 
         # Baseline: no offloading
         grads_baseline = _get_grads(model, x)
@@ -101,7 +101,7 @@ class TestCheckpointInputOffload:
 
         torch.manual_seed(42)
         model = CheckpointedMLP(dim=dim, num_layers=num_layers).cuda().to(torch.bfloat16)
-        x = torch.randn(batch_size, dim, device='cuda', dtype=torch.bfloat16)
+        x = torch.randn(batch_size, dim, device="cuda", dtype=torch.bfloat16)
 
         # Baseline
         torch.cuda.reset_peak_memory_stats()
@@ -136,7 +136,7 @@ class TestCheckpointInputOffload:
         offloader = CheckpointInputOffload(pin_memory=True, min_tensor_numel=1)
 
         # Simulate a parameter
-        param = torch.randn(100, 100, device='cuda', requires_grad=True)
+        param = torch.randn(100, 100, device="cuda", requires_grad=True)
         assert param.is_leaf
         result = offloader._pack(param)
         # Should be returned as-is (not wrapped in a dict)
@@ -148,22 +148,22 @@ class TestCheckpointInputOffload:
         offloader = CheckpointInputOffload(pin_memory=True, min_tensor_numel=1)
 
         # Simulate an activation (non-leaf tensor)
-        x = torch.randn(100, 100, device='cuda', requires_grad=True)
+        x = torch.randn(100, 100, device="cuda", requires_grad=True)
         activation = x * 2  # non-leaf
         assert not activation.is_leaf
 
         result = offloader._pack(activation)
         assert isinstance(result, dict), "Activations should be offloaded to CPU"
-        assert 'cpu' in result and 'device' in result
-        assert result['cpu'].device == torch.device('cpu')
-        assert result['cpu'].is_pinned()
+        assert "cpu" in result and "device" in result
+        assert result["cpu"].device == torch.device("cpu")
+        assert result["cpu"].is_pinned()
 
     def test_small_tensor_not_offloaded(self):
         """Tensors below min_tensor_numel should NOT be offloaded."""
         offloader = CheckpointInputOffload(pin_memory=True, min_tensor_numel=1000)
 
         # Small activation (100 elements < 1000 threshold)
-        x = torch.randn(10, 10, device='cuda', requires_grad=True)
+        x = torch.randn(10, 10, device="cuda", requires_grad=True)
         activation = x * 2
         assert activation.numel() == 100
 
@@ -195,7 +195,7 @@ class TestCheckpointInputOffload:
         """Pack then unpack should produce an equivalent tensor."""
         offloader = CheckpointInputOffload(pin_memory=True, min_tensor_numel=1)
 
-        x = torch.randn(10, 10, device='cuda', requires_grad=True)
+        x = torch.randn(10, 10, device="cuda", requires_grad=True)
         activation = x * 2  # non-leaf
 
         packed = offloader._pack(activation)
@@ -213,7 +213,7 @@ class TestCheckpointInputOffload:
         """Offloader should be harmless under torch.no_grad()."""
         torch.manual_seed(42)
         model = CheckpointedMLP(dim=128, num_layers=4).cuda().to(torch.bfloat16)
-        x = torch.randn(4, 128, device='cuda', dtype=torch.bfloat16)
+        x = torch.randn(4, 128, device="cuda", dtype=torch.bfloat16)
 
         offloader = CheckpointInputOffload(pin_memory=True)
         model.enable_gc(context_fn=offloader.get_context_fn())
@@ -235,7 +235,7 @@ class TestCheckpointInputOffload:
         model.zero_grad()
         total_loss = 0.0
         for i in range(3):
-            x = torch.randn(4, 128, device='cuda', dtype=torch.bfloat16)
+            x = torch.randn(4, 128, device="cuda", dtype=torch.bfloat16)
             with offloader:
                 out = model(x)
             loss = out.sum() / 3.0
@@ -252,12 +252,12 @@ class TestCheckpointInputOffload:
 
         # Using as context manager should not raise
         with offloader:
-            x = torch.randn(10, device='cuda', requires_grad=True)
+            x = torch.randn(10, device="cuda", requires_grad=True)
             y = x * 2
             # Inside context, hooks should be active
 
         # Outside context, hooks should be popped (no error on normal ops)
-        z = torch.randn(10, device='cuda', requires_grad=True)
+        z = torch.randn(10, device="cuda", requires_grad=True)
         w = z * 2
         w.sum().backward()
 
@@ -265,12 +265,12 @@ class TestCheckpointInputOffload:
         """Non-contiguous source tensors should round-trip with correct values."""
         offloader = CheckpointInputOffload(pin_memory=True, min_tensor_numel=1)
 
-        base = torch.randn(10, 20, device='cuda')
+        base = torch.randn(10, 20, device="cuda")
         # Create non-contiguous views: transposed, sliced, strided
         views = [
-            base.t(),                          # transposed: stride=(1, 20)
-            base[:, ::2],                       # strided slice: every other column
-            base[2:8, 3:15],                    # sub-block slice
+            base.t(),  # transposed: stride=(1, 20)
+            base[:, ::2],  # strided slice: every other column
+            base[2:8, 3:15],  # sub-block slice
         ]
 
         for i, v in enumerate(views):
@@ -305,7 +305,7 @@ class TestCheckpointInputOffload:
         use_prefix_grouper = True
         _checkpoint_offloader = offloader
 
-        should_raise = (use_prefix_grouper and _checkpoint_offloader is not None and actor_module.training)
+        should_raise = use_prefix_grouper and _checkpoint_offloader is not None and actor_module.training
         assert should_raise, "Conflict condition should trigger"
 
         # Verify no conflict when either is disabled
