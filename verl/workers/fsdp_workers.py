@@ -502,12 +502,14 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             actor_module.to(torch_dtype)
 
             if enable_checkpoint_input_offload:
-                assert enable_gradient_checkpointing, (
-                    "enable_checkpoint_input_offload requires enable_gradient_checkpointing=True"
-                )
-                assert not enable_activation_offload, (
-                    "enable_checkpoint_input_offload is not compatible with enable_activation_offload"
-                )
+                if not enable_gradient_checkpointing:
+                    raise ValueError(
+                        "enable_checkpoint_input_offload requires enable_gradient_checkpointing=True"
+                    )
+                if enable_activation_offload:
+                    raise ValueError(
+                        "enable_checkpoint_input_offload is not compatible with enable_activation_offload"
+                    )
 
             if enable_gradient_checkpointing:
                 gc_kwargs = {"use_reentrant": False}
@@ -515,7 +517,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                     raise ValueError(
                         "enable_checkpoint_input_offload and use_prefix_grouper cannot be enabled simultaneously. "
                         "PrefixGrouper uses a separate forward path that bypasses the offload context manager, "
-                        "causing checkpoint_input_offload to be silently inactive. "
+                        "causing enable_checkpoint_input_offload to be silently inactive. "
                         "Please disable one of them: set model.enable_checkpoint_input_offload=false "
                         "or set use_prefix_grouper=false."
                     )

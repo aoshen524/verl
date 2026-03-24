@@ -18,7 +18,6 @@ optimizer_offload: false
 # Only for FSDP2: offload param/grad/optimizer during train
 offload_policy: false
 
-
 # Reshard after forward pass to reduce memory footprint
 # For FSDP1, `false` enables `ShardingStrategy.SHARD_GRAD_OP`
 reshard_after_forward: true
