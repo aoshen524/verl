@@ -131,9 +131,9 @@ class DataParallelPPOActor(BasePPOActor):
         # so the two features are incompatible during training.
         if self.use_prefix_grouper and self._checkpoint_offloader is not None and self.actor_module.training:
             raise RuntimeError(
-                "use_prefix_grouper and checkpoint_input_offload are both active during training. "
+                "use_prefix_grouper and enable_checkpoint_input_offload are both active during training. "
                 "PrefixGrouper's forward path bypasses CheckpointInputOffload, making offload silently inactive. "
-                "This should have been caught at build time — please check fsdp_workers.py configuration."
+                "This should have been caught at build time — please check model config."
             )
 
         # PrefixGrouper path for shared-prefix optimization

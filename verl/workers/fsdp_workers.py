@@ -340,6 +340,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
         use_liger=False,
         role="actor",
         enable_activation_offload=False,
+        enable_checkpoint_input_offload=False,
         use_prefix_grouper=False,
         use_tiled_mlp=False,
         tiled_mlp_shards=4,
@@ -500,22 +501,25 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             # some parameters may not in torch_dtype. TODO(zhangchi.usc1992) remove this after we switch to fsdp2
             actor_module.to(torch_dtype)
 
+            if enable_checkpoint_input_offload:
+                assert enable_gradient_checkpointing, (
+                    "enable_checkpoint_input_offload requires enable_gradient_checkpointing=True"
+                )
+                assert not enable_activation_offload, (
+                    "enable_checkpoint_input_offload is not compatible with enable_activation_offload"
+                )
+
             if enable_gradient_checkpointing:
                 gc_kwargs = {"use_reentrant": False}
-                checkpoint_input_offload = (
-                    role == "actor"
-                    and hasattr(self.config, "actor")
-                    and self.config.actor.get("fsdp_config", {}).get("checkpoint_input_offload", False)
-                )
-                if checkpoint_input_offload and use_prefix_grouper:
+                if enable_checkpoint_input_offload and use_prefix_grouper:
                     raise ValueError(
-                        "checkpoint_input_offload and use_prefix_grouper cannot be enabled simultaneously. "
+                        "enable_checkpoint_input_offload and use_prefix_grouper cannot be enabled simultaneously. "
                         "PrefixGrouper uses a separate forward path that bypasses the offload context manager, "
                         "causing checkpoint_input_offload to be silently inactive. "
-                        "Please disable one of them: set fsdp_config.checkpoint_input_offload=false "
+                        "Please disable one of them: set model.enable_checkpoint_input_offload=false "
                         "or set use_prefix_grouper=false."
                     )
-                if checkpoint_input_offload:
+                if enable_checkpoint_input_offload:
                     from verl.utils.checkpoint_offload import CheckpointInputOffload
 
                     self._checkpoint_offloader = CheckpointInputOffload(pin_memory=True)
@@ -945,6 +949,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                 use_liger=self.config.model.get("use_liger", False),
                 role="actor",
                 enable_activation_offload=self.config.model.get("enable_activation_offload", False),
+                enable_checkpoint_input_offload=self.config.model.get("enable_checkpoint_input_offload", False),
                 use_prefix_grouper=self.config.actor.get("use_prefix_grouper", False),
                 use_tiled_mlp=use_tiled_mlp,
                 tiled_mlp_shards=tiled_mlp_shards,
