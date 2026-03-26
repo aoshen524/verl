@@ -503,13 +503,9 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
 
             if enable_checkpoint_input_offload:
                 if not enable_gradient_checkpointing:
-                    raise ValueError(
-                        "enable_checkpoint_input_offload requires enable_gradient_checkpointing=True"
-                    )
+                    raise ValueError("enable_checkpoint_input_offload requires enable_gradient_checkpointing=True")
                 if enable_activation_offload:
-                    raise ValueError(
-                        "enable_checkpoint_input_offload is not compatible with enable_activation_offload"
-                    )
+                    raise ValueError("enable_checkpoint_input_offload is not compatible with enable_activation_offload")
 
             if enable_gradient_checkpointing:
                 gc_kwargs = {"use_reentrant": False}
