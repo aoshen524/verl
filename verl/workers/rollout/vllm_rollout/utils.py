@@ -177,7 +177,13 @@ class vLLMColocateWorkerExtension:
         patch_vllm_moe_model_weight_loader(self.model_runner.model)
 
     def update_weights_from_ipc(self, peft_config: dict = None, base_sync_done=False, use_shm: bool = False):
-        """Update the weights of the rollout model."""
+        """Update the weights of the rollout model.
+
+        For EP-sharded MoE routed-expert sync, the trainer side wires
+        ``moe_routed_expert_global_ids`` into ``BucketedWeightSender.header``;
+        we read it from the receiver here (per-bucket, sender attaches it
+        to the first bucket only) and pass it down to ``_update_weights``.
+        """
         from vllm.platforms import current_platform
 
         from verl.workers.rollout.vllm_rollout.bucketed_weight_transfer import BucketedWeightReceiver
@@ -215,8 +221,13 @@ class vLLMColocateWorkerExtension:
             use_shm=use_shm,
         )
         receiver.receive_weights(
-            on_bucket_received=lambda weights: self._update_weights(
-                weights, peft_config=peft_config, base_sync_done=base_sync_done
+            on_bucket_received=lambda weights, header=None: self._update_weights(
+                weights,
+                peft_config=peft_config,
+                base_sync_done=base_sync_done,
+                moe_routed_expert_global_ids=(
+                    header.get("moe_routed_expert_global_ids") if header else None
+                ),
             )
         )
 
@@ -239,7 +250,14 @@ class vLLMColocateWorkerExtension:
             model_config = self.model_runner.vllm_config.model_config
             process_weights_after_loading(model, model_config, self.device)
 
-    def _update_weights(self, weights: list[tuple[str, torch.Tensor]], peft_config: dict, base_sync_done: bool):
+    def _update_weights(
+        self,
+        weights: list[tuple[str, torch.Tensor]],
+        peft_config: dict,
+        base_sync_done: bool,
+        *,
+        moe_routed_expert_global_ids: dict[str, list[int]] | None = None,
+    ):
         if peft_config and base_sync_done:
             weights = dict(weights)
             lora_request = TensorLoRARequest(
@@ -251,6 +269,51 @@ class vLLMColocateWorkerExtension:
             )
             self.add_lora(lora_request)
             logger.info(f"vLLM load weights, loaded_params: {len(weights)}")
+        elif moe_routed_expert_global_ids is not None:
+            # Sharded MoE branch: routed-expert weights flagged by the trainer
+            # in `moe_routed_expert_global_ids` go through
+            # FusedMoE.load_routed_expert_weights (vllm-side new API). All
+            # other weights fall back to the standard model.load_weights.
+            from vllm.model_executor.layers.fused_moe import FusedMoE
+
+            moes = [
+                (m.layer_name, m)
+                for m in self.model_runner.model.modules()
+                if isinstance(m, FusedMoE)
+            ]
+            # Longest-prefix first to guard nested MTP / speculation layers.
+            moes.sort(key=lambda kv: -len(kv[0]))
+
+            passthrough: list[tuple[str, torch.Tensor]] = []
+            sharded_count = 0
+            for name, tensor in weights:
+                matched_moe = None
+                matched_expert_name = None
+                for layer_name, moe in moes:
+                    if name.startswith(layer_name + "."):
+                        if name in moe_routed_expert_global_ids:
+                            matched_moe = moe
+                            matched_expert_name = name[len(layer_name) + 1 :]
+                        break
+                if matched_moe is not None and matched_expert_name is not None:
+                    list(
+                        matched_moe.load_routed_expert_weights(
+                            [(matched_expert_name, tensor)],
+                            {matched_expert_name: moe_routed_expert_global_ids[name]},
+                        )
+                    )
+                    sharded_count += 1
+                else:
+                    passthrough.append((name, tensor))
+            if passthrough:
+                self.model_runner.model.load_weights(passthrough)
+            logger.info(
+                "Loading sharded MoE weights: %d via load_routed_expert_weights, "
+                "%d via passthrough load_weights (bucket size=%d)",
+                sharded_count,
+                len(passthrough),
+                len(weights),
+            )
         else:
             # Add the FP8 related logic here as sharding manager has been deprecated.
             # Check if FP8 quantization is enabled and apply appropriate weight loading

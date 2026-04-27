@@ -88,11 +88,17 @@ class BucketedWeightSender:
         zmq_handle: str,
         bucket_size_mb: int = 512,
         use_shm: bool = False,
+        header: dict | None = None,
     ):
         self.zmq_handle = zmq_handle
         self.bucket_size_mb = bucket_size_mb
         self.bucket_size = int(bucket_size_mb) << 20
         self.use_shm = use_shm
+        # Optional header dict shipped with the FIRST bucket. Receiver caches it
+        # and forwards to ``on_bucket_received``. Used for transport-level metadata
+        # like ``moe_routed_expert_global_ids`` that needs to reach the load
+        # callback before any tensor copies happen.
+        self.header = header
 
         self.zmq_context = zmq.Context.instance()
         self.socket = None
@@ -115,6 +121,7 @@ class BucketedWeightSender:
             # send bucket weights
             offset = 0
             bucket_meta: dict[str, TensorMetadata] = {}
+            first_bucket = True  # header rides with the first bucket only
             # dtype = PrecisionType.to_dtype(self.config.dtype)
             async for name, weight in ensure_async_iterator(weights):
                 # model parameters are in fp32 full precision
@@ -127,7 +134,11 @@ class BucketedWeightSender:
                 # fill the tensor bucket
                 if offset + weight.nbytes > self.bucket_size:
                     get_torch_device().synchronize()
-                    self.socket.send_pyobj({"bucket_meta": bucket_meta, "is_last": False})
+                    msg = {"bucket_meta": bucket_meta, "is_last": False}
+                    if first_bucket and self.header is not None:
+                        msg["header"] = self.header
+                        first_bucket = False
+                    self.socket.send_pyobj(msg)
                     self.socket.recv()
                     bucket_meta = {}
                     offset = 0
@@ -148,7 +159,11 @@ class BucketedWeightSender:
 
             # send the last bucket
             get_torch_device().synchronize()
-            self.socket.send_pyobj({"bucket_meta": bucket_meta, "is_last": True})
+            msg = {"bucket_meta": bucket_meta, "is_last": True}
+            if first_bucket and self.header is not None:
+                # Single-bucket case: header rides with the only (last) bucket.
+                msg["header"] = self.header
+            self.socket.send_pyobj(msg)
             self.socket.recv()
         finally:
             self._cleanup()
@@ -230,15 +245,31 @@ class BucketedWeightReceiver:
         Receive weights from sender and process each bucket via callback.
 
         Args:
-            on_bucket_received: Callback function(weights: list[(name, tensor)]) called per bucket.
+            on_bucket_received: Callback called per bucket. Two supported
+                signatures:
+                  * ``f(weights)``                           — legacy, still works.
+                  * ``f(weights, header=None)``              — new, lets the
+                    callback see optional transport-level metadata that the
+                    sender attached to the first bucket (e.g. EP-sharded
+                    routed-expert global-id map). ``header`` is the same dict
+                    on every bucket of a single ``receive_weights`` call once
+                    seen; ``None`` if the sender did not set one.
+
+        Header dispatch is best-effort: we first try the new 2-arg form,
+        falling back to the legacy 1-arg form on ``TypeError`` so old callers
+        keep working.
         """
         try:
             self._init_socket()
             self._init_buffer()
 
+            cached_header: dict | None = None
+
             # receive bucket and update weights
             while True:
                 metadata = self.socket.recv_pyobj()
+                if "header" in metadata and metadata["header"] is not None:
+                    cached_header = metadata["header"]
                 weights, tensor = [], None
                 for name, meta in metadata["bucket_meta"].items():
                     shape, dtype, offset = meta["shape"], meta["dtype"], meta["offset"]
@@ -247,7 +278,11 @@ class BucketedWeightReceiver:
                     if self.use_shm:
                         tensor = tensor.to(self.device)
                     weights.append((name, tensor))
-                on_bucket_received(weights)
+                try:
+                    on_bucket_received(weights, header=cached_header)
+                except TypeError:
+                    # Legacy single-arg callback.
+                    on_bucket_received(weights)
                 get_torch_device().synchronize()
                 self.socket.send(b"")
                 del weights, tensor
