@@ -50,8 +50,14 @@ class SingleTurnAgentLoop(AgentLoopBase):
         videos = multi_modal_data.get("videos")
 
         # 2. apply chat template and tokenize
-        prompt_ids = await self.apply_chat_template(
+        prompt_ids, model_inputs = await self.apply_chat_template(
             messages,
+            images=images,
+            videos=videos,
+            return_model_inputs=True,
+        )
+        processor_output_data = self.maybe_build_processor_output_data(
+            model_inputs=model_inputs,
             images=images,
             videos=videos,
         )
@@ -65,6 +71,7 @@ class SingleTurnAgentLoop(AgentLoopBase):
                 sampling_params=sampling_params,
                 image_data=images,
                 video_data=videos,
+                processor_output_data=processor_output_data,
             )
         if metrics.get("num_preempted") is None:
             metrics["num_preempted"] = output.num_preempted if output.num_preempted is not None else -1

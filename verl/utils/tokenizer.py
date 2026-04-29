@@ -19,6 +19,26 @@ import warnings
 __all__ = ["hf_tokenizer", "hf_processor", "normalize_token_ids"]
 
 
+def _get_qwen3_vl_model_class(model_type):
+    match model_type:
+        case "qwen3_5":
+            from transformers.models.qwen3_5 import Qwen3_5Model
+
+            return Qwen3_5Model
+        case "qwen3_5_moe":
+            from transformers.models.qwen3_5_moe import Qwen3_5MoeModel
+
+            return Qwen3_5MoeModel
+        case "qwen3_vl_moe":
+            from transformers.models.qwen3_vl_moe import Qwen3VLMoeModel
+
+            return Qwen3VLMoeModel
+        case _:
+            from transformers.models.qwen3_vl import Qwen3VLModel
+
+            return Qwen3VLModel
+
+
 def normalize_token_ids(tokenized_output) -> list[int]:
     """Normalize tokenizer outputs into a flat ``list[int]``.
 
@@ -137,9 +157,7 @@ def hf_processor(name_or_path, **kwargs):
 
                 model_class = Qwen2_5_VLModel
             case "Qwen3VLProcessor":
-                from transformers.models.qwen3_vl import Qwen3VLModel
-
-                model_class = Qwen3VLModel
+                model_class = _get_qwen3_vl_model_class(getattr(config, "model_type", None))
             case "Glm4vImageProcessor":
                 from transformers.models.glm4v import Glm4vModel
 
