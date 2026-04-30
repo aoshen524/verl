@@ -332,6 +332,9 @@ skip:
 # When enabled (True), the rollout assume token in token out for generation
 skip_tokenizer_init: True
 
+# When enabled, send backend-ready preprocessed multimodal inputs instead of raw image/video media.
+use_preprocessed_multimodal_input: False
+
 # Whether to enable rollout routing replay for MoE models
 # When enabled (True), the rollout will record the routing decisions.
 enable_rollout_routing_replay: False

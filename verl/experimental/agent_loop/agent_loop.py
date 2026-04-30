@@ -31,6 +31,11 @@ from tensordict import TensorDict
 from transformers import AutoProcessor, AutoTokenizer
 
 from verl.experimental.agent_loop.prometheus_utils import update_prometheus_config
+from verl.experimental.agent_loop.rollout_mm_processor import (
+    append_preprocessed_multimodal_input_kwargs,
+    build_rollout_preprocessed_multimodal_input,
+    refresh_preprocessed_multimodal_input_prompt_ids,
+)
 from verl.experimental.agent_loop.utils import resolve_config_path
 from verl.experimental.teacher_loop import MultiTeacherModelManager
 from verl.protocol import DataProto
@@ -125,6 +130,8 @@ class AsyncLLMServerManager:
             load_balancer_handle (ray.actor.ActorHandle): shared global load balancer actor.
         """
         self.config = config
+        self.rollout_config, _ = _get_rollout_and_model_config(config)
+        self.rollout_name = self.rollout_config.get("name", None)
         self._load_balancer = load_balancer_handle
         self._server_id_to_handle: dict[str, ray.actor.ActorHandle] = dict(servers)
 
@@ -149,6 +156,7 @@ class AsyncLLMServerManager:
         sampling_params: dict[str, Any],
         image_data: Optional[list[Any]] = None,
         video_data: Optional[list[Any]] = None,
+        preprocessed_multimodal_input: Optional[Any] = None,
         **kwargs: Any,
     ) -> TokenOutput | DiffusionOutput:
         """Generate tokens from prompt ids.
@@ -163,7 +171,7 @@ class AsyncLLMServerManager:
         """
         server_id, server = await self._acquire_server(request_id)
         try:
-            output: TokenOutput | DiffusionOutput = await server.generate.remote(
+            generate_kwargs = dict(
                 request_id=uuid4().hex,  # use new request_id for each turn
                 prompt_ids=prompt_ids,
                 sampling_params=sampling_params,
@@ -171,6 +179,17 @@ class AsyncLLMServerManager:
                 video_data=video_data,
                 **kwargs,
             )
+            preprocessed_multimodal_input = refresh_preprocessed_multimodal_input_prompt_ids(
+                rollout_name=self.rollout_name,
+                preprocessed_multimodal_input=preprocessed_multimodal_input,
+                prompt_ids=prompt_ids,
+            )
+            append_preprocessed_multimodal_input_kwargs(
+                generate_kwargs,
+                rollout_name=self.rollout_name,
+                preprocessed_multimodal_input=preprocessed_multimodal_input,
+            )
+            output: TokenOutput | DiffusionOutput = await server.generate.remote(**generate_kwargs)
             return output
         finally:
             self._release_server(server_id)
@@ -343,6 +362,7 @@ class AgentLoopBase(ABC):
         images: list[Image.Image] = None,
         videos: list[tuple[torch.Tensor, dict]] = None,
         remove_system_prompt: bool = False,
+        return_model_inputs: bool = False,
     ):
         """Apply chat template to messages with optional tools, images, and videos.
 
@@ -352,10 +372,12 @@ class AgentLoopBase(ABC):
             images (list[Image.Image], optional): Input images. Defaults to None.
             videos (list[tuple[torch.Tensor, dict]], optional): Input videos. Defaults to None.
             remove_system_prompt (bool, optional): Whether to remove system prompt. Defaults to False.
+            return_model_inputs (bool, optional): Whether to also return processor model inputs.
 
         Returns:
-            list[int]: Prompt token ids.
+            list[int] | tuple[list[int], Any]: Prompt token ids, plus model inputs when requested.
         """
+        model_inputs = None
         if self.processor is not None:
             raw_prompt = await self.loop.run_in_executor(
                 None,
@@ -384,7 +406,7 @@ class AgentLoopBase(ABC):
                 return_tensors="pt",
                 do_sample_frames=False,
             )
-            prompt_ids = normalize_token_ids(model_inputs.pop("input_ids"))
+            prompt_ids = normalize_token_ids(model_inputs["input_ids"])
         else:
             tokenized_prompt = await self.loop.run_in_executor(
                 None,
@@ -402,7 +424,27 @@ class AgentLoopBase(ABC):
         if remove_system_prompt:
             prompt_ids = prompt_ids[len(self.system_prompt) :]
 
+        if return_model_inputs:
+            return prompt_ids, model_inputs
         return prompt_ids
+
+    def maybe_build_preprocessed_multimodal_input(
+        self,
+        *,
+        prompt_ids: list[int],
+        model_inputs: Any,
+        images: list[Image.Image] = None,
+        videos: list[tuple[torch.Tensor, dict]] = None,
+    ) -> Any | None:
+        return build_rollout_preprocessed_multimodal_input(
+            rollout_name=self.rollout_config.get("name", None),
+            rollout_config=self.rollout_config,
+            processor=self.processor,
+            prompt_ids=prompt_ids,
+            model_inputs=model_inputs,
+            images=images,
+            videos=videos,
+        )
 
     @abstractmethod
     async def run(self, sampling_params: dict[str, Any], **kwargs) -> AgentLoopOutput:
@@ -647,8 +689,8 @@ class AgentLoopWorker:
 
         # Some AgentLoop may have already computed the reward score, e.g SWE-agent.
 
-        # NOTE: consistent with the legacy batch version of generate_sequences that existed in the
-        # deprecated vLLM SPMD rollout implementation.
+        # NOTE: consistent with the legacy batch version of generate_sequences
+        # that existed in the deprecated SPMD rollout implementation.
         # prompt_ids: left padded with zeros (e.g., [0,0,0,0,1,2,3,4])
         # response_ids: right padded with zeros (e.g., [5,6,7,8,0,0,0,0])
         # input_ids: concatenation of prompt + response

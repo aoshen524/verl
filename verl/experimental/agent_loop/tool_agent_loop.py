@@ -16,7 +16,7 @@ import json
 import logging
 import os
 from enum import Enum
-from typing import Any
+from typing import Any, Optional
 from uuid import uuid4
 
 import torch
@@ -68,6 +68,7 @@ class AgentData:
 
         # State variables
         self.prompt_ids: list[int] = []
+        self.preprocessed_multimodal_input: Optional[Any] = None
         self.response_ids: list[int] = []
         self.response_mask: list[int] = []
         self.response_logprobs: list[float] = []
@@ -186,13 +187,20 @@ class ToolAgentLoop(AgentLoopBase):
     async def _handle_pending_state(self, agent_data: AgentData, sampling_params: dict[str, Any]) -> AgentState:
         """Handle the pending state: prepare the prompt and start generation."""
         schemas = getattr(agent_data, "_active_tool_schemas", self.tool_schemas)
-        prompt_ids = await self.apply_chat_template(
+        prompt_ids, model_inputs = await self.apply_chat_template(
             agent_data.messages,
             tools=schemas,
             images=agent_data.image_data,
             videos=agent_data.video_data,
+            return_model_inputs=True,
         )
         agent_data.prompt_ids = prompt_ids
+        agent_data.preprocessed_multimodal_input = self.maybe_build_preprocessed_multimodal_input(
+            prompt_ids=prompt_ids,
+            model_inputs=model_inputs,
+            images=agent_data.image_data,
+            videos=agent_data.video_data,
+        )
         return AgentState.GENERATING
 
     async def _handle_generating_state(
@@ -206,6 +214,7 @@ class ToolAgentLoop(AgentLoopBase):
                 sampling_params=sampling_params,
                 image_data=agent_data.image_data,
                 video_data=agent_data.video_data,
+                preprocessed_multimodal_input=agent_data.preprocessed_multimodal_input,
             )
         # first time to set num_preempted
         if agent_data.metrics.get("num_preempted") is None:
@@ -345,6 +354,12 @@ class ToolAgentLoop(AgentLoopBase):
                 agent_data.image_data = [agent_data.image_data]
             for img in new_images_this_turn:
                 agent_data.image_data.append(img)
+            if agent_data.preprocessed_multimodal_input is not None:
+                logger.warning(
+                    "Disabling preprocessed multimodal input after tool-returned images; "
+                    "subsequent turns in this trajectory will use the raw multimodal path."
+                )
+            agent_data.preprocessed_multimodal_input = None
 
         agent_data.prompt_ids += response_ids
         agent_data.response_mask += [0] * len(response_ids)

@@ -15,7 +15,7 @@
 import numpy as np
 import pytest
 
-from verl.utils.tokenizer import normalize_token_ids
+from verl.utils.tokenizer import _get_qwen3_vl_model_class, normalize_token_ids
 
 
 class DummyBatchEncoding:
@@ -66,3 +66,23 @@ def test_normalize_token_ids_valid_outputs(tokenized_output, expected):
 def test_normalize_token_ids_invalid_outputs(tokenized_output):
     with pytest.raises(TypeError):
         normalize_token_ids(tokenized_output)
+
+
+@pytest.mark.parametrize(
+    ("model_type", "expected_class_name"),
+    [
+        ("qwen3_vl", "Qwen3VLModel"),
+        ("qwen3_vl_moe", "Qwen3VLMoeModel"),
+        ("qwen3_5", "Qwen3_5Model"),
+        ("qwen3_5_moe", "Qwen3_5MoeModel"),
+    ],
+)
+def test_qwen3_vl_processor_uses_matching_model_rope_index(model_type, expected_class_name):
+    module_by_model_type = {
+        "qwen3_vl": "transformers.models.qwen3_vl",
+        "qwen3_vl_moe": "transformers.models.qwen3_vl_moe",
+        "qwen3_5": "transformers.models.qwen3_5",
+        "qwen3_5_moe": "transformers.models.qwen3_5_moe",
+    }
+    pytest.importorskip(module_by_model_type[model_type])
+    assert _get_qwen3_vl_model_class(model_type).__name__ == expected_class_name

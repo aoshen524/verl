@@ -53,6 +53,7 @@ class FullyAsyncLLMServerManager(AsyncLLMServerManager):
         sampling_params: dict[str, Any],
         image_data: Optional[list[Any]] = None,
         video_data: Optional[list[Any]] = None,
+        preprocessed_multimodal_input: Optional[Any] = None,
     ) -> TokenOutput:
         """Generate tokens from prompt ids.
 
@@ -90,6 +91,7 @@ class FullyAsyncLLMServerManager(AsyncLLMServerManager):
                 sampling_params=sampling_params,
                 image_data=image_data,
                 video_data=video_data,
+                preprocessed_multimodal_input=preprocessed_multimodal_input,
             )
 
             # 2. merge output into final_output
